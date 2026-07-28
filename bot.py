@@ -1,288 +1,46 @@
-‎import os
-‎import sqlite3
-‎import random
-‎import asyncio
-‎from pyrogram import Client, filters
-‎from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
-‎
-‎# ================== CONFIG (Use Env Vars for Security) ==================
-‎API_ID = int(os.getenv("API_ID", "31068209"))
-‎API_HASH = os.getenv("API_HASH", "23883c643d5a596ce49070e9ae9300d0")
-‎BOT_TOKEN = os.getenv("BOT_TOKEN", "8293292993:AAEvT_FiUSk6tSibpniYjVYVJDaA1OSESo4")
-‎ADMIN_ID = int(os.getenv("ADMIN_ID", "7663556460"))
-‎
-‎REFER_REWARD = 2  # Per refer kitna milega
-‎MIN_WITHDRAW = 5
-‎BOT_ON = True
-‎
-‎# ================== DATABASE SETUP ==================
-‎def init_db():
-‎    conn = sqlite3.connect("users.db", check_same_thread=False)
-‎    c = conn.cursor()
-‎    c.execute("""CREATE TABLE IF NOT EXISTS users (
-‎        user_id INTEGER PRIMARY KEY, 
-‎        inviter_id INTEGER, 
-‎        balance INTEGER DEFAULT 0, 
-‎        verified INTEGER DEFAULT 0,
-‎        is_new INTEGER DEFAULT 1)""")
-‎    conn.commit()
-‎    return conn, c
-‎
-‎conn, c = init_db()
-‎
-‎def get_user(uid):
-‎    c.execute("SELECT * FROM users WHERE user_id=?", (uid,))
-‎    return c.fetchone()
-‎
-‎# ================== BOT START ==================
-‎app = Client("CashFactoryBot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
-‎
-‎# Keyboards
-‎def main_menu():
-‎    return InlineKeyboardMarkup([
-‎        [InlineKeyboardButton("💰 Balance", callback_data="balance"), InlineKeyboardButton("👥 Refer", callback_data="refer")],
-‎        [InlineKeyboardButton("📤 Withdraw", callback_data="withdraw")],
-‎        [InlineKeyboardButton("✅ Verify Account", callback_data="verify")]
-‎    ])
-‎
-‎def admin_menu():
-‎    return InlineKeyboardMarkup([
-‎        [InlineKeyboardButton("📢 Broadcast", callback_data="broadcast"), InlineKeyboardButton("📊 Stats", callback_data="stats")],
-‎        [InlineKeyboardButton("➕ Add Balance", callback_data="addbal"), InlineKeyboardButton("🛑 Bot Toggle", callback_data="toggle")]
-‎    ])
-‎
-‎# ================== HANDLERS ==================
-‎
-‎@app.on_message(filters.command("start"))
-‎async def start(_, m: Message):
-‎    uid = m.from_user.id
-‎    if not BOT_ON and uid != ADMIN_ID:
-‎        return await m.reply("🙇🏻 Bot is currently maintenance mode.")
-‎
-‎    inviter = None
-‎    if len(m.command) > 1:
-‎        try:
-‎            inviter = int(m.command[1])
-‎            if inviter == uid: inviter = None
-‎        except: inviter = None
-‎
-‎    user = get_user(uid)
-‎    if not user:
-‎        c.execute("INSERT OR IGNORE INTO users (user_id, inviter_id) VALUES (?,?)", (uid, inviter))
-‎        conn.commit()
-‎    
-‎    if uid == ADMIN_ID:
-‎        await m.reply("👑 Welcome Admin! Control the bot from here.", reply_markup=admin_menu())
-‎    else:
-‎        await m.reply(f"👋 Welcome {m.from_user.first_name}!\n\nEarn money by referring friends.", reply_markup=main_menu())
-‎
-‎@app.on_callback_query()
-‎async def cb_handler(client, q):
-‎    uid = q.from_user.id
-‎    data = q.data
-‎    user = get_user(uid)
-‎
-‎    if data == "balance":
-‎        await q.answer()
-‎        await q.message.edit_text(f"👤 User: {q.from_user.first_name}\n💰 Balance: ₹{user[2]}\n✅ Verified: {'Yes' if user[3] else 'No'}", reply_markup=main_menu())
-‎
-‎    elif data == "refer":
-‎        link = f"https://t.me/{(await client.get_me()).username}?start={uid}"
-‎        await q.message.edit_text(f"👥 **Referral System**\n\nInvite friends and earn ₹{REFER_REWARD} per refer!\n\n🔗 Your Link: `{link}`", reply_markup=main_menu())
-‎
-‎    elif data == "verify":
-‎        if user[3] == 1:
-‎            return await q.answer("You are already verified! ✅", show_alert=True)
-‎        
-‎        # Verify process
-‎        c.execute("UPDATE users SET verified=1 WHERE user_id=?", (uid,))
-‎        conn.commit()
-‎        
-‎        # If user was referred, give reward to inviter
-‎        if user[1] and user[4] == 1: # user[1] is inviter_id, user[4] is is_new
-‎            c.execute("UPDATE users SET balance=balance+?, is_new=0 WHERE user_id=?", (REFER_REWARD, user[1]))
-‎            conn.commit()
-‎            try:
-‎                await client.send_message(user[1], f"🎉 Someone joined via your link! You got ₹{REFER_REWARD}")
-‎            except: pass
-‎        
-‎        await q.answer("Account Verified Successfully! ✅", show_alert=True)
-‎        await q.message.edit_text("Verified! Now you can earn.", reply_markup=main_menu())
-‎
-‎    elif data == "withdraw":
-‎        if user[2] < MIN_WITHDRAW:
-‎            return await q.answer(f"Minimum withdraw is ₹{MIN_WITHDRAW}!", show_alert=True)
-‎        await q.message.reply("Send your UPI ID or Payment Details to Admin.")
-‎        # Admin ko alert
-‎        await client.send_message(ADMIN_ID, f"📩 **Withdraw Request**\nUser: {uid}\nBalance: ₹{user[2]}")
-‎
-‎    # Admin Handlers
-‎    if uid == ADMIN_ID:
-‎        if data == "stats":
-‎            c.execute("SELECT COUNT(*) FROM users")
-‎            total = c.fetchone()[0]
-‎            c.execute("SELECT COUNT(*) FROM users WHERE verified=1")
-‎            ver = c.fetchone()[0]
-‎            await q.answer(f"Total: {total} | Verified: {ver}", show_alert=True)
-‎        
-‎        elif data == "broadcast":
-‎            await q.message.reply("Reply to this message with the text you want to broadcast.")
-‎
-‎# ================== ADMIN ACTIONS ==================
-‎@app.on_message(filters.user(ADMIN_ID) & filters.reply)
-‎async def broadcast_action(_, m: Message):
-‎    c.execute("SELECT user_id FROM users")
-‎    users = c.fetchall()
-‎    count = 0
-‎    for u in users:
-‎        try:
-‎            await m.reply_to_message.copy(u[0])
-‎            count += 1
-‎            await asyncio.sleep(0.1)
-‎        except: pass
-‎    await m.reply(f"✅ Broadcast sent to {count} users.")
-‎
-‎# Start the bot
-‎if __name__ == "__main__":
-‎    print("Bot is starting...")
-‎    app.run()bot.getMe().then((botInfo) => {
-    BOT_NAME = botInfo.first_name;
-    BOT_USERNAME = botInfo.username;
-    console.log(`✅ Automatically fetched bot details:`);
-    console.log(`🤖 Name: ${BOT_NAME}`);
-    console.log(`🔗 Username: @${BOT_USERNAME}`);
-    console.log(`🚀 ${BOT_NAME} is now running!`);
-}).catch(err => {
-    console.error("❌ Error fetching bot info:", err.message);
-});
+import os
+import sqlite3
+import asyncio
+from pyrogram import Client, filters
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
+from flask import Flask
+from threading import Thread
 
-// Prevent bot from crashing due to Telegram API polling network errors
-bot.on("polling_error", (err) => console.log("Polling error:", err.message));
+# ================== WEB SERVER FOR RENDER ==================
+# Ye section Render ko bot band karne se rokega
+server = Flask(__name__)
+@server.route('/')
+def home():
+    return "Bot is Running!"
 
-// --- MEMORY STATE ---
-const userStates = {};
+def run_web():
+    server.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
 
-// --- MENUS ---
-const USER_MENU = {
-    reply_markup: {
-        keyboard: [
-            ['Balance', 'Refer Earn'],
-            ['Bonus', 'Withdraw'],
-            ['Payout method']
-        ],
-        resize_keyboard: true
-    }
-};
+# ================== CONFIG ==================
+API_ID = int(os.getenv("API_ID", "31068209"))
+API_HASH = os.getenv("API_HASH", "23883c643d5a596ce49070e9ae9300d0")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8293292993:AAEvT_FiUSk6tSibpniYjVYVJDaA1OSESo4")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "7663556460"))
 
-const ADMIN_MENU = {
-    reply_markup: {
-        keyboard: [
-            ['🤖 Bot ON/OFF', '💸 Withdraw ON/OFF'],
-            ['📢 Add Channel', '❌ Remove Channel'], 
-            ['📢 Broadcast', '🆔 Chat IDs'], 
-            ['📝 Channel Message'], 
-            ['⚙️ Set API Gateway', '👨‍💻 Manage Admins'],
-            ['⬇️ Min Withdraw', '⬆️ Max Withdraw'],
-            ['💰 Refer Amount', '📉 Min Refer'],
-            ['🎁 Set Bonus'],
-            ['📊 Stats', '🏆 Leaderboard'],
-            ['🚫 Ban User', '✅ Unban User'],
-            ['💳 Reset Balance'],
-            ['➕ Add Amount', '➖ Deduct Amount']
-        ],
-        resize_keyboard: true
-    }
-};
+# ================== DATABASE ==================
+conn = sqlite3.connect("users.db", check_same_thread=False)
+c = conn.cursor()
+c.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, inviter_id INTEGER, balance INTEGER DEFAULT 0, verified INTEGER DEFAULT 0, is_new INTEGER DEFAULT 1)")
+conn.commit()
 
-// --- UTILS ---
-async function checkIsAdmin(id) {
-    if (id === ADMIN_ID) return true;
-    const snap = await get(ref(db, `admins/${id}`));
-    return snap.exists() && snap.val() === true;
-}
+app = Client("CashBot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-async function getSettings() {
-    const snap = await get(ref(db, 'settings'));
-    const defaultSettings = {
-        botStatus: true,
-        withdrawStatus: true,
-        minWithdraw: 10,
-        maxWithdraw: 100,
-        referAmount: 5,
-        minRefer: 1,
-        bonusAmount: 1
-    };
-    if (!snap.exists()) {
-        await set(ref(db, 'settings'), defaultSettings);
-        return defaultSettings;
-    }
-    return { ...defaultSettings, ...snap.val() };
-}
+# (Aapka baki saara bot logic yahan rahega...)
+@app.on_message(filters.command("start"))
+async def start(_, m):
+    await m.reply("Bot Started! Send /help for more.")
 
-async function getGateways() {
-    const snap = await get(ref(db, 'gateways'));
-    return snap.exists() ? snap.val() : {};
-}
-
-// --- UPDATED CHECK CHANNELS FUNCTION ---
-async function checkChannels(userId) {
-    const snap = await get(ref(db, 'channels'));
-    if (!snap.exists()) return { allJoined: true, channels: [] };
-    
-    const channels = Object.values(snap.val());
-    let allJoined = true;
-    let pending = []; 
-
-    for (let ch of channels) {
-        let chId = ch.includes('|') ? ch.split('|')[0] : ch;
-        let isJoinedOrRequested = false;
-        let numericChatId = chId;
-
-        try {
-            const chatInfo = await bot.getChat(chId);
-            numericChatId = chatInfo.id;
-            
-            const member = await bot.getChatMember(numericChatId, userId);
-            if (['member', 'administrator', 'creator'].includes(member.status)) {
-                isJoinedOrRequested = true;
-            }
-        } catch (e) {
-        }
-
-        if (!isJoinedOrRequested) {
-            const pendingReq = await get(ref(db, `join_requests/${numericChatId}/${userId}`));
-            if (pendingReq.exists() && pendingReq.val() === true) {
-                isJoinedOrRequested = true;
-            }
-        }
-
-        if (!isJoinedOrRequested) {
-            allJoined = false;
-            pending.push(ch); 
-        }
-    }
-    return { allJoined, channels: pending };
-}
-
-function generateJoinKeyboard(channels) {
-    let buttons = channels.map((ch) => {
-        let url = ch.includes('|') ? ch.split('|')[1] : `https://t.me/${ch.replace('@', '')}`;
-        return { text: `📢 Join`, url: url };
-    });
-
-    let keyboard = [];
-    for (let i = 0; i < buttons.length; i += 2) {
-        keyboard.push(buttons.slice(i, i + 2));
-    }
-    keyboard.push([{ text: '✅ Verify Join', callback_data: 'verify_join' }]);
-    
-    return { reply_markup: { inline_keyboard: keyboard } };
-}
-
-// --- MAIN MESSAGE HANDLER ---
-bot.on('message', async (msg) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
+# ================== RUN BOT ==================
+if __name__ == "__main__":
+    print("Starting Web Server...")
+    Thread(target=run_web).start() # Web server starts in background
+    print("Starting Bot...")
+    app.run()d;
     const text = msg.text || ''; 
     const firstName = msg.from.first_name || 'User';
 
