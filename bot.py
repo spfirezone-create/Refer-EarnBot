@@ -1,40 +1,151 @@
-import TelegramBot from 'node-telegram-bot-api';
-import { initializeApp } from 'firebase/app';
-import { getDatabase, ref, get, set, update, runTransaction } from 'firebase/database';
-import axios from 'axios';
-import express from 'express'; // Added for Render Deployment
-
-// --- RENDER DUMMY SERVER (DO NOT REMOVE) ---
-const app_server = express();
-const PORT = process.env.PORT || 3000;
-app_server.get('/', (req, res) => res.send('Bot is running successfully on Render!'));
-app_server.listen(PORT, () => console.log(`Render Web Server listening on port ${PORT}`));
-
-// --- CONFIGURATION ---
-const BOT_TOKEN = '8713191692:AAH84bKAs0mrmXexjF194NWTG88KA5hkg34'; // Token
-const ADMIN_ID = 7663556460; // Master Admin
-
-// These will be auto-filled by the bot token automatically
-let BOT_NAME = "Loading..."; 
-let BOT_USERNAME = "Loading...";
-
-const firebaseConfig = {
-    apiKey: "AIzaSyAkpcLp-oBWk4k39QyH-5BkLM0bsYeM8ao",
-    authDomain: "referearnbot.firebaseapp.com",
-    databaseURL: "https://referearnbot-default-rtdb.firebaseio.com",
-    projectId: "referearnbot",
-    storageBucket: "referearnbot.firebasestorage.app",
-    messagingSenderId: "884048848740",
-    appId: "1:884048848740:web:1e10af168d6cfdd0cbfc71"
-};
-
-// --- INITIALIZATION ---
-const app = initializeApp(firebaseConfig);
-const db = getDatabase(app);
-const bot = new TelegramBot(BOT_TOKEN, { polling: true });
-
-// Auto-fetch Bot Name and Username from Token
-bot.getMe().then((botInfo) => {
+‎import os
+‎import sqlite3
+‎import random
+‎import asyncio
+‎from pyrogram import Client, filters
+‎from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
+‎
+‎# ================== CONFIG (Use Env Vars for Security) ==================
+‎API_ID = int(os.getenv("API_ID", "31068209"))
+‎API_HASH = os.getenv("API_HASH", "23883c643d5a596ce49070e9ae9300d0")
+‎BOT_TOKEN = os.getenv("BOT_TOKEN", "8293292993:AAEvT_FiUSk6tSibpniYjVYVJDaA1OSESo4")
+‎ADMIN_ID = int(os.getenv("ADMIN_ID", "7663556460"))
+‎
+‎REFER_REWARD = 2  # Per refer kitna milega
+‎MIN_WITHDRAW = 5
+‎BOT_ON = True
+‎
+‎# ================== DATABASE SETUP ==================
+‎def init_db():
+‎    conn = sqlite3.connect("users.db", check_same_thread=False)
+‎    c = conn.cursor()
+‎    c.execute("""CREATE TABLE IF NOT EXISTS users (
+‎        user_id INTEGER PRIMARY KEY, 
+‎        inviter_id INTEGER, 
+‎        balance INTEGER DEFAULT 0, 
+‎        verified INTEGER DEFAULT 0,
+‎        is_new INTEGER DEFAULT 1)""")
+‎    conn.commit()
+‎    return conn, c
+‎
+‎conn, c = init_db()
+‎
+‎def get_user(uid):
+‎    c.execute("SELECT * FROM users WHERE user_id=?", (uid,))
+‎    return c.fetchone()
+‎
+‎# ================== BOT START ==================
+‎app = Client("CashFactoryBot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+‎
+‎# Keyboards
+‎def main_menu():
+‎    return InlineKeyboardMarkup([
+‎        [InlineKeyboardButton("💰 Balance", callback_data="balance"), InlineKeyboardButton("👥 Refer", callback_data="refer")],
+‎        [InlineKeyboardButton("📤 Withdraw", callback_data="withdraw")],
+‎        [InlineKeyboardButton("✅ Verify Account", callback_data="verify")]
+‎    ])
+‎
+‎def admin_menu():
+‎    return InlineKeyboardMarkup([
+‎        [InlineKeyboardButton("📢 Broadcast", callback_data="broadcast"), InlineKeyboardButton("📊 Stats", callback_data="stats")],
+‎        [InlineKeyboardButton("➕ Add Balance", callback_data="addbal"), InlineKeyboardButton("🛑 Bot Toggle", callback_data="toggle")]
+‎    ])
+‎
+‎# ================== HANDLERS ==================
+‎
+‎@app.on_message(filters.command("start"))
+‎async def start(_, m: Message):
+‎    uid = m.from_user.id
+‎    if not BOT_ON and uid != ADMIN_ID:
+‎        return await m.reply("🙇🏻 Bot is currently maintenance mode.")
+‎
+‎    inviter = None
+‎    if len(m.command) > 1:
+‎        try:
+‎            inviter = int(m.command[1])
+‎            if inviter == uid: inviter = None
+‎        except: inviter = None
+‎
+‎    user = get_user(uid)
+‎    if not user:
+‎        c.execute("INSERT OR IGNORE INTO users (user_id, inviter_id) VALUES (?,?)", (uid, inviter))
+‎        conn.commit()
+‎    
+‎    if uid == ADMIN_ID:
+‎        await m.reply("👑 Welcome Admin! Control the bot from here.", reply_markup=admin_menu())
+‎    else:
+‎        await m.reply(f"👋 Welcome {m.from_user.first_name}!\n\nEarn money by referring friends.", reply_markup=main_menu())
+‎
+‎@app.on_callback_query()
+‎async def cb_handler(client, q):
+‎    uid = q.from_user.id
+‎    data = q.data
+‎    user = get_user(uid)
+‎
+‎    if data == "balance":
+‎        await q.answer()
+‎        await q.message.edit_text(f"👤 User: {q.from_user.first_name}\n💰 Balance: ₹{user[2]}\n✅ Verified: {'Yes' if user[3] else 'No'}", reply_markup=main_menu())
+‎
+‎    elif data == "refer":
+‎        link = f"https://t.me/{(await client.get_me()).username}?start={uid}"
+‎        await q.message.edit_text(f"👥 **Referral System**\n\nInvite friends and earn ₹{REFER_REWARD} per refer!\n\n🔗 Your Link: `{link}`", reply_markup=main_menu())
+‎
+‎    elif data == "verify":
+‎        if user[3] == 1:
+‎            return await q.answer("You are already verified! ✅", show_alert=True)
+‎        
+‎        # Verify process
+‎        c.execute("UPDATE users SET verified=1 WHERE user_id=?", (uid,))
+‎        conn.commit()
+‎        
+‎        # If user was referred, give reward to inviter
+‎        if user[1] and user[4] == 1: # user[1] is inviter_id, user[4] is is_new
+‎            c.execute("UPDATE users SET balance=balance+?, is_new=0 WHERE user_id=?", (REFER_REWARD, user[1]))
+‎            conn.commit()
+‎            try:
+‎                await client.send_message(user[1], f"🎉 Someone joined via your link! You got ₹{REFER_REWARD}")
+‎            except: pass
+‎        
+‎        await q.answer("Account Verified Successfully! ✅", show_alert=True)
+‎        await q.message.edit_text("Verified! Now you can earn.", reply_markup=main_menu())
+‎
+‎    elif data == "withdraw":
+‎        if user[2] < MIN_WITHDRAW:
+‎            return await q.answer(f"Minimum withdraw is ₹{MIN_WITHDRAW}!", show_alert=True)
+‎        await q.message.reply("Send your UPI ID or Payment Details to Admin.")
+‎        # Admin ko alert
+‎        await client.send_message(ADMIN_ID, f"📩 **Withdraw Request**\nUser: {uid}\nBalance: ₹{user[2]}")
+‎
+‎    # Admin Handlers
+‎    if uid == ADMIN_ID:
+‎        if data == "stats":
+‎            c.execute("SELECT COUNT(*) FROM users")
+‎            total = c.fetchone()[0]
+‎            c.execute("SELECT COUNT(*) FROM users WHERE verified=1")
+‎            ver = c.fetchone()[0]
+‎            await q.answer(f"Total: {total} | Verified: {ver}", show_alert=True)
+‎        
+‎        elif data == "broadcast":
+‎            await q.message.reply("Reply to this message with the text you want to broadcast.")
+‎
+‎# ================== ADMIN ACTIONS ==================
+‎@app.on_message(filters.user(ADMIN_ID) & filters.reply)
+‎async def broadcast_action(_, m: Message):
+‎    c.execute("SELECT user_id FROM users")
+‎    users = c.fetchall()
+‎    count = 0
+‎    for u in users:
+‎        try:
+‎            await m.reply_to_message.copy(u[0])
+‎            count += 1
+‎            await asyncio.sleep(0.1)
+‎        except: pass
+‎    await m.reply(f"✅ Broadcast sent to {count} users.")
+‎
+‎# Start the bot
+‎if __name__ == "__main__":
+‎    print("Bot is starting...")
+‎    app.run()bot.getMe().then((botInfo) => {
     BOT_NAME = botInfo.first_name;
     BOT_USERNAME = botInfo.username;
     console.log(`✅ Automatically fetched bot details:`);
